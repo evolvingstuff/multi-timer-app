@@ -335,15 +335,6 @@
             50% { box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3); }
             100% { box-shadow: 0 8px 25px rgba(0,0,0,0.15); }
         }
-
-        .finished {
-            animation: flash 1s infinite;
-        }
-
-        @keyframes flash {
-            0%, 50% { background: rgba(255, 75, 87, 0.2); }
-            25%, 75% { background: rgba(255, 255, 255, 0.95); }
-        }
     </style>
 </head>
 <body>
@@ -496,6 +487,7 @@
                 const seconds = parseInt(document.getElementById('seconds').value) || 0;
                 const ms = (hours * 3600 + minutes * 60 + seconds) * 1000;
                 timer.recentWallTime = ms;
+                timer.lastSetValue = ms; // Remember this value for reset
             }
 
             timers.push(timer);
@@ -550,14 +542,25 @@
         function resetTimer(id) {
             const timer = timers.find(t => t.id === id);
             if (timer) {
+                // Make sure the timer is paused
                 pauseTimer(id);
-                // For countdown, get from editor values or reset to 0
-                timer.recentWallTime = timer.type === 'countdown' && document.getElementById('hours') ? 
-                    (parseInt(document.getElementById('hours').value || 0) * 3600 + 
-                    parseInt(document.getElementById('minutes').value || 0) * 60 + 
-                    parseInt(document.getElementById('seconds').value || 0)) * 1000 : 0;
+                
+                // For countdown, reset to initial value from setup or 0
+                if (timer.type === 'countdown') {
+                    // Use last set value if available, otherwise default to 5 minutes
+                    timer.recentWallTime = timer.lastSetValue || 5 * 60 * 1000;
+                } else {
+                    // Stopwatch always resets to 0
+                    timer.recentWallTime = 0;
+                }
+                
+                // Reset timestamp too
+                timer.recentTimestamp = Date.now();
+                
+                // Ensure timer stays paused after reset
+                timer.paused = true;
                 updateTimerDisplay(id);
-                document.querySelector(`[data-timer-id="${id}"]`).classList.remove('finished');
+                updateTimerButtons(id);
                 saveTimers();
             }
         }
@@ -588,6 +591,12 @@
                         if (timer.recentWallTime === 0) {
                             timer.paused = true;
                             playBeep();
+                            // Update UI to show timer is paused
+                            updateTimerButtons(timer.id);
+                            const timerCard = document.querySelector(`[data-timer-id="${timer.id}"]`);
+                            if (timerCard) {
+                                timerCard.classList.remove('running');
+                            }
                         }
                     }
                     timer.recentTimestamp = now;
@@ -711,6 +720,11 @@
             
             // Update timer value
             timer.recentWallTime = newTimeInSeconds;
+            
+            // For countdown timers, also store last edited value for reset
+            if (timer.type === 'countdown') {
+                timer.lastSetValue = newTimeInSeconds;
+            }
             
             // Save to localStorage
             saveTimers();
