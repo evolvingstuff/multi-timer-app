@@ -133,6 +133,69 @@
             color: #2c3e50;
             margin-bottom: 10px;
             font-family: 'Courier New', monospace;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .time-display:hover {
+            color: #667eea;
+            transform: scale(1.02);
+        }
+
+        .time-editor {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            margin-bottom: 15px;
+        }
+
+        .time-editor-input {
+            width: 60px;
+            padding: 8px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 1rem;
+        }
+
+        .time-editor-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .time-editor-controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            justify-content: center;
+        }
+
+        .editor-btn {
+            padding: 5px 15px;
+            border: none;
+            border-radius: 15px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+
+        .save-btn {
+            background: #2ecc71;
+            color: white;
+        }
+
+        .save-btn:hover {
+            background: #27ae60;
+        }
+
+        .cancel-btn {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .cancel-btn:hover {
+            background: #c0392b;
         }
 
         .timer-type {
@@ -331,7 +394,8 @@
     <script>
         let timers = [];
         let timerIdCounter = 1;
-        let selectedTimerType = 'stopwatch';
+        let selectedTimerType = 'stopwatch'; // default type when creating timers
+        const UPDATE_INTERVAL = 100; // 100 ms global tick
 
         // Audio context for beep sound
         let audioContext;
@@ -361,10 +425,33 @@
         }
 
         function loadTimers() {
-            const savedTimers = localStorage.getItem('multiTimers');
-            if (savedTimers) {
-                timers = JSON.parse(savedTimers);
-                timerIdCounter = Math.max(...timers.map(t => t.id), 0) + 1;
+            try {
+                const saved = localStorage.getItem('multiTimers');
+                if (saved) {
+                    timers = JSON.parse(saved);
+                    const now = Date.now();
+                    // ensure numbers
+                    timers.forEach(t => {
+                        // recentWallTime in ms, fallback to 0
+                        t.recentWallTime = isFinite(Number(t.recentWallTime)) ? Number(t.recentWallTime) : 0;
+
+                        // CRITICAL FIX: Always reset timestamp to current time on page load
+                        // This prevents stale timestamps causing huge deltas in calculations
+                        t.recentTimestamp = now;
+
+                        // ensure paused flag exists
+                        if (typeof t.paused !== 'boolean') t.paused = true;
+                        
+                        // Remove unnecessary property
+                        delete t.initialWallTime;
+                    });
+                    timerIdCounter = Math.max(0, ...timers.map(t => t.id)) + 1;
+                }
+                renderTimers();
+            } catch (e) {
+                console.error('Error loading timers:', e);
+                localStorage.removeItem('multiTimers');
+                timers = [];
                 renderTimers();
             }
         }
@@ -393,21 +480,22 @@
         }
 
         function createTimer() {
+            const now = Date.now();
             const timer = {
                 id: timerIdCounter++,
                 name: `Timer ${timerIdCounter - 1}`,
                 type: selectedTimerType,
-                currentTime: 0,
-                isRunning: false,
-                interval: null
+                paused: true,
+                recentTimestamp: now,
+                recentWallTime: 0,
             };
 
             if (selectedTimerType === 'countdown') {
                 const hours = parseInt(document.getElementById('hours').value) || 0;
                 const minutes = parseInt(document.getElementById('minutes').value) || 0;
                 const seconds = parseInt(document.getElementById('seconds').value) || 0;
-                timer.initialTime = hours * 3600 + minutes * 60 + seconds;
-                timer.currentTime = timer.initialTime;
+                const ms = (hours * 3600 + minutes * 60 + seconds) * 1000;
+                timer.recentWallTime = ms;
             }
 
             timers.push(timer);
@@ -419,9 +507,6 @@
         function deleteTimer(id) {
             const timerIndex = timers.findIndex(t => t.id === id);
             if (timerIndex !== -1) {
-                if (timers[timerIndex].interval) {
-                    clearInterval(timers[timerIndex].interval);
-                }
                 timers.splice(timerIndex, 1);
                 saveTimers();
                 renderTimers();
@@ -436,40 +521,26 @@
             }
         }
 
+        // --- Timestamp-based start / pause ---
         function startTimer(id) {
-            initAudio(); // Initialize audio on user interaction
+            initAudio();
             const timer = timers.find(t => t.id === id);
-            if (timer && !timer.isRunning) {
-                timer.isRunning = true;
-                timer.interval = setInterval(() => {
-                    if (timer.type === 'stopwatch') {
-                        timer.currentTime++;
-                    } else {
-                        timer.currentTime--;
-                        if (timer.currentTime <= 0) {
-                            timer.currentTime = 0;
-                            pauseTimer(id);
-                            playBeep();
-                            document.querySelector(`[data-timer-id="${id}"]`).classList.add('finished');
-                            setTimeout(() => {
-                                document.querySelector(`[data-timer-id="${id}"]`)?.classList.remove('finished');
-                            }, 3000);
-                        }
-                    }
-                    updateTimerDisplay(id);
-                    saveTimers();
-                }, 1000);
+            if (timer && timer.paused) {
+                timer.paused = false;
+                timer.recentTimestamp = Date.now(); // do NOT change recentWallTime
                 updateTimerButtons(id);
                 document.querySelector(`[data-timer-id="${id}"]`).classList.add('running');
+                saveTimers();
             }
         }
 
         function pauseTimer(id) {
             const timer = timers.find(t => t.id === id);
-            if (timer && timer.isRunning) {
-                timer.isRunning = false;
-                clearInterval(timer.interval);
-                timer.interval = null;
+            if (timer && !timer.paused) {
+                // Update the wall time to its current value
+                // No need to calculate delta here - the global update should have
+                // kept recentWallTime accurate
+                timer.paused = true;
                 updateTimerButtons(id);
                 document.querySelector(`[data-timer-id="${id}"]`).classList.remove('running');
                 saveTimers();
@@ -480,26 +551,69 @@
             const timer = timers.find(t => t.id === id);
             if (timer) {
                 pauseTimer(id);
-                timer.currentTime = timer.type === 'countdown' ? timer.initialTime : 0;
+                // For countdown, get from editor values or reset to 0
+                timer.recentWallTime = timer.type === 'countdown' && document.getElementById('hours') ? 
+                    (parseInt(document.getElementById('hours').value || 0) * 3600 + 
+                    parseInt(document.getElementById('minutes').value || 0) * 60 + 
+                    parseInt(document.getElementById('seconds').value || 0)) * 1000 : 0;
                 updateTimerDisplay(id);
                 document.querySelector(`[data-timer-id="${id}"]`).classList.remove('finished');
                 saveTimers();
             }
         }
 
-        function formatTime(seconds) {
-            const hrs = Math.floor(Math.abs(seconds) / 3600);
-            const mins = Math.floor((Math.abs(seconds) % 3600) / 60);
-            const secs = Math.abs(seconds) % 60;
-            const sign = seconds < 0 ? '-' : '';
-            return `${sign}${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        function formatTime(ms) {
+            // guard against NaN or negative values
+            if (!isFinite(ms) || ms < 0) ms = 0;
+
+            const totalSeconds = Math.floor(ms / 1000);
+            const hrs = Math.floor(totalSeconds / 3600);
+            const mins = Math.floor((totalSeconds % 3600) / 60);
+            const secs = totalSeconds % 60;
+            return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
         }
+
+        // Global 100 ms update loop
+        function globalUpdate() {
+            const now = Date.now();
+            let needsSave = false; // Only save if we actually update running timers
+            
+            timers.forEach(timer => {
+                if (!timer.paused) {
+                    const delta = now - timer.recentTimestamp;
+                    if (timer.type === 'stopwatch') {
+                        timer.recentWallTime += delta;
+                    } else {
+                        timer.recentWallTime = Math.max(0, timer.recentWallTime - delta);
+                        if (timer.recentWallTime === 0) {
+                            timer.paused = true;
+                            playBeep();
+                        }
+                    }
+                    timer.recentTimestamp = now;
+                    updateTimerDisplay(timer.id);
+                    needsSave = true;
+                }
+            });
+            
+            // Save running timers frequently to preserve state
+            if (needsSave) {
+                saveTimers();
+            }
+        }
+
+        // Load timers on page load
+        window.addEventListener('load', () => {
+            loadTimers();
+            // Start global update loop after timers are properly loaded
+            setInterval(globalUpdate, UPDATE_INTERVAL);
+        });
 
         function updateTimerDisplay(id) {
             const timer = timers.find(t => t.id === id);
             const displayElement = document.querySelector(`[data-timer-id="${id}"] .time-display`);
             if (timer && displayElement) {
-                displayElement.textContent = formatTime(timer.currentTime);
+                displayElement.textContent = formatTime(timer.recentWallTime);
             }
         }
 
@@ -510,14 +624,121 @@
                 const startBtn = timerElement.querySelector('.start-btn');
                 const pauseBtn = timerElement.querySelector('.pause-btn');
                 
-                if (timer.isRunning) {
-                    startBtn.style.display = 'none';
-                    pauseBtn.style.display = 'inline-block';
-                } else {
+                if (timer.paused) {
                     startBtn.style.display = 'inline-block';
                     pauseBtn.style.display = 'none';
+                } else {
+                    startBtn.style.display = 'none';
+                    pauseBtn.style.display = 'inline-block';
                 }
             }
+        }
+
+        function toggleTimeEdit(id) {
+            const timer = timers.find(t => t.id === id);
+            if (!timer) return;
+            
+            const timerCard = document.querySelector(`[data-timer-id="${id}"]`);
+            const timeDisplay = timerCard.querySelector('.timer-display');
+            
+            // Check if we're already editing
+            if (timerCard.querySelector('.time-editor')) {
+                return;
+            }
+            
+            // Parse current time values
+            const hrs = Math.floor(Math.abs(timer.recentWallTime / 1000) / 3600);
+            const mins = Math.floor((Math.abs(timer.recentWallTime / 1000) % 3600) / 60);
+            const secs = Math.abs(timer.recentWallTime / 1000) % 60;
+            
+            // Hide time display temporarily
+            const displayDiv = timerCard.querySelector('.time-display');
+            displayDiv.style.display = 'none';
+            
+            // Create editor elements
+            const editorDiv = document.createElement('div');
+            editorDiv.className = 'time-editor';
+            editorDiv.innerHTML = `
+                <input type="number" class="time-editor-input" id="edit-hours-${id}" min="0" max="23" value="${hrs}">
+                <span>:</span>
+                <input type="number" class="time-editor-input" id="edit-minutes-${id}" min="0" max="59" value="${mins}">
+                <span>:</span>
+                <input type="number" class="time-editor-input" id="edit-seconds-${id}" min="0" max="59" value="${secs}">
+            `;
+            
+            // Create save/cancel buttons
+            const controlsDiv = document.createElement('div');
+            controlsDiv.className = 'time-editor-controls';
+            controlsDiv.innerHTML = `
+                <button class="editor-btn save-btn" onclick="saveTimeEdit(${id})">Save</button>
+                <button class="editor-btn cancel-btn" onclick="cancelTimeEdit(${id})">Cancel</button>
+            `;
+            
+            // Insert the editor
+            timeDisplay.insertBefore(editorDiv, displayDiv.nextSibling);
+            timeDisplay.insertBefore(controlsDiv, editorDiv.nextSibling);
+        }
+
+        function saveTimeEdit(id) {
+            const timer = timers.find(t => t.id === id);
+            if (!timer) return;
+            
+            // Get input values
+            const hours = document.getElementById(`edit-hours-${id}`).value;
+            const minutes = document.getElementById(`edit-minutes-${id}`).value;
+            const seconds = document.getElementById(`edit-seconds-${id}`).value;
+            
+            // Validate inputs
+            if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) {
+                alert("Please enter valid numbers");
+                return;
+            }
+            
+            if (parseInt(hours) < 0 || parseInt(minutes) < 0 || parseInt(seconds) < 0 || 
+                parseInt(minutes) > 59 || parseInt(seconds) > 59) {
+                alert("Please enter valid time values");
+                return;
+            }
+            
+            // Convert to seconds
+            const newTimeInSeconds = (parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseInt(seconds)) * 1000;
+            
+            // Was timer running? If so, pause it while we update
+            const wasRunning = !timer.paused;
+            if (wasRunning) {
+                pauseTimer(id);
+            }
+            
+            // Update timer value
+            timer.recentWallTime = newTimeInSeconds;
+            
+            // Save to localStorage
+            saveTimers();
+            
+            // Restart if it was running before
+            if (wasRunning) {
+                startTimer(id);
+            } else {
+                updateTimerDisplay(id);
+            }
+            
+            // Remove editor and show display
+            cancelTimeEdit(id);
+        }
+
+        function cancelTimeEdit(id) {
+            const timerCard = document.querySelector(`[data-timer-id="${id}"]`);
+            
+            // Show time display again
+            const displayDiv = timerCard.querySelector('.time-display');
+            displayDiv.style.display = 'block';
+            
+            // Remove editor elements
+            const editorDiv = timerCard.querySelector('.time-editor');
+            if (editorDiv) editorDiv.remove();
+            
+            const controlsDiv = timerCard.querySelector('.time-editor-controls');
+            if (controlsDiv) controlsDiv.remove();
         }
 
         function renderTimers() {
@@ -527,6 +748,9 @@
             timers.forEach(timer => {
                 const timerCard = document.createElement('div');
                 timerCard.className = 'timer-card';
+                if (!timer.paused) {
+                    timerCard.classList.add('running');
+                }
                 timerCard.setAttribute('data-timer-id', timer.id);
                 
                 timerCard.innerHTML = `
@@ -536,30 +760,24 @@
                         <button class="delete-btn" onclick="deleteTimer(${timer.id})">&#215;</button>
                     </div>
                     <div class="timer-display">
-                        <div class="time-display">${formatTime(timer.currentTime)}</div>
+                        <div class="time-display" onclick="toggleTimeEdit(${timer.id})">${formatTime(timer.recentWallTime)}</div>
                         <div class="timer-type">${timer.type.charAt(0).toUpperCase() + timer.type.slice(1)}</div>
                     </div>
                     <div class="timer-controls">
                         <button class="control-btn start-btn" onclick="startTimer(${timer.id})" 
-                                style="display: ${timer.isRunning ? 'none' : 'inline-block'}">Start</button>
+                                style="display: ${timer.paused ? 'inline-block' : 'none'}">Start</button>
                         <button class="control-btn pause-btn" onclick="pauseTimer(${timer.id})" 
-                                style="display: ${timer.isRunning ? 'inline-block' : 'none'}">Pause</button>
+                                style="display: ${timer.paused ? 'none' : 'inline-block'}">Pause</button>
                         <button class="control-btn reset-btn" onclick="resetTimer(${timer.id})">Reset</button>
                     </div>
                 `;
                 
                 grid.appendChild(timerCard);
                 
-                // Restart timer if it was running
-                if (timer.isRunning) {
-                    timer.isRunning = false; // Reset state
-                    startTimer(timer.id); // Restart
-                }
+                // IMPORTANT: We do NOT want to reset and restart timers here!
+                // If a timer is running, just add to the global update loop
             });
         }
-
-        // Load timers on page load
-        window.addEventListener('load', loadTimers);
 
         // Close modal when clicking outside
         window.addEventListener('click', (e) => {
