@@ -658,7 +658,7 @@
             // Parse current time values
             const hrs = Math.floor(Math.abs(timer.recentWallTime / 1000) / 3600);
             const mins = Math.floor((Math.abs(timer.recentWallTime / 1000) % 3600) / 60);
-            const secs = Math.abs(timer.recentWallTime / 1000) % 60;
+            const secs = Math.floor(Math.abs(timer.recentWallTime / 1000) % 60);
             
             // Hide time display temporarily
             const displayDiv = timerCard.querySelector('.time-display');
